@@ -2,41 +2,23 @@ import sys
 import socket
 import time
 import random
-import logging
 
 class AccioClient:
-    BUFFER_SIZE = 10000
-    ERROR_PROBABILITY = 0.1
-
     def __init__(self, host, port, file_path):
         self.host = host
         self.port = port
         self.file_path = file_path
-        self.logger = self.setup_logger()
-
-    def setup_logger(self):
-        logger = logging.getLogger("AccioClient")
-        logger.setLevel(logging.DEBUG)
-        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        ch = logging.StreamHandler()
-        ch.setFormatter(formatter)
-        logger.addHandler(ch)
-        return logger
 
     def connect_tcp(self):
         try:
-            client_socket = socket.create_connection((self.host, self.port), timeout=10)
-            self.set_socket_options(client_socket)
-            return client_socket
-        except socket.timeout:
-            self.handle_error("Connection timed out. Make sure the server is reachable.", exit_code=1)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.set_socket_options(sock)
+            sock.settimeout(10)  # Set a 10-second timeout for the connection
+            sock.connect((self.host, self.port))
+            return sock
         except (socket.error, OSError) as e:
-            self.handle_error(f"Error connecting to the server: {e}", exit_code=1)
+            print(f"Error connecting to the server: {e}")
             return None
-
-    def handle_error(self, message, exit_code=1):
-        self.logger.error(message)
-        sys.exit(exit_code)
 
     def receive_data_until(self, sock, expected_data):
         received_data = b''
@@ -47,65 +29,68 @@ class AccioClient:
                     raise ConnectionError("Server disconnected unexpectedly.")
                 received_data += data_chunk
         except (socket.error, OSError, ConnectionError, socket.timeout) as e:
-            self.logger.error(f"Error receiving data: {e}")
+            print(f"Error receiving data: {e}")
         return received_data
 
     def set_socket_options(self, sock):
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1)
         except socket.error as e:
-            self.handle_error(f"Error setting socket options: {e}", exit_code=1)
+            print(f"Error setting socket options: {e}")
 
     def send_response(self, sock, response):
         try:
             sock.sendall(response.encode())
         except (socket.error, OSError) as e:
-            self.logger.error(f"Error sending response: {e}")
-
-    def read_file_content(self):
-        try:
-            with open(self.file_path, 'rb') as file:
-                return file.read()
-        except FileNotFoundError:
-            self.handle_error(f"File '{self.file_path}' not found.", exit_code=1)
-        except Exception as e:
-            self.handle_error(f"Error reading file: {e}", exit_code=1)
-        return b''
+            print(f"Error sending response: {e}")
 
     def send_file_content(self, sock):
-        file_content = self.read_file_content()
-        for chunk in self.chunk_data(file_content, self.BUFFER_SIZE):
-            self.emulate_delay()
-            if random.random() < self.ERROR_PROBABILITY:
-                self.logger.warning("Simulated transmission error occurred.")
-                continue
-            sock.sendall(chunk)
+        buffer_size = 10000
+        error_probability = 0.1  # Example: 10% probability of error
 
-    def emulate_delay(self):
-        # Dynamic sleep delay based on buffer size
-        time.sleep(min(0.1, self.BUFFER_SIZE / 100000))
+        try:
+            with open(self.file_path, 'rb') as file:
+                while True:
+                    file_chunk = file.read(buffer_size)
+                    if not file_chunk:
+                        break  # Break the loop if the entire file has been read
 
-    def chunk_data(self, data, chunk_size):
-        for i in range(0, len(data), chunk_size):
-            yield data[i:i + chunk_size]
+                    # Introduce a sleep delay (emulated delay)
+                    time.sleep(0.1)  # 100 milliseconds delay
+
+                    # Simulated transmission error based on probability
+                    if random.random() < error_probability:
+                        print("Simulated transmission error occurred.")
+                        continue  # Skip sending this chunk and try the next one
+
+                    sock.sendall(file_chunk)
+
+        except FileNotFoundError:
+            print(f"File '{self.file_path}' not found.")
+        except Exception as e:
+            print(f"Error sending file: {e}")
 
     def run(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
-                client_socket.connect((self.host, self.port))
-                self.receive_and_send_commands(client_socket)
-                self.send_file_content(client_socket)
-            except (socket.timeout, socket.error, ConnectionError, socket.gaierror) as e:
-                self.logger.error(f"Error during the communication: {e}")
-                sys.exit(1)
+                s.connect((self.host, self.port))
 
-    def receive_and_send_commands(self, client_socket):
-        self.receive_and_send(client_socket, b'accio\r\n', "confirm-accio\r\n")
-        self.receive_and_send(client_socket, b'accio\r\n', "confirm-accio-again\r\n\r\n")
+                # Wait for the first "accio\r\n" command
+                self.receive_data_until(s, b'accio\r\n')
 
-    def receive_and_send(self, client_socket, expected_data, response):
-        self.receive_data_until(client_socket, expected_data)
-        self.send_response(client_socket, response)
+                # Send the first response
+                self.send_response(s, "confirm-accio\r\n")
+
+                # Wait for the second "accio\r\n" command
+                self.receive_data_until(s, b'accio\r\n')
+
+                # Send the second response
+                self.send_response(s, "confirm-accio-again\r\n\r\n")
+
+                # Send the binary content of the file
+                self.send_file_content(s)
+            except (socket.error, OSError, ConnectionError, socket.timeout) as e:
+                print(f"Error during the communication: {e}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 4:
@@ -113,13 +98,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     host = sys.argv[1]
-
-    try:
-        port = int(sys.argv[2])
-    except ValueError:
-        print("Invalid port number. Please provide a valid integer port.")
-        sys.exit(1)
-
+    port = int(sys.argv[2])
     file_path = sys.argv[3]
 
     accio_client = AccioClient(host, port, file_path)
