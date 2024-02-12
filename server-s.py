@@ -112,31 +112,35 @@ def accio_client(host, port, file_path):
     # Create a socket object
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    # Connect to the server
-    client_socket.connect((host, port))
+    try:
+        # Connect to the server
+        client_socket.connect((host, port))
 
-    # Receive the first accio command
-    first_accio = client_socket.recv(1024)
-    print(f"Received first accio command: {first_accio.decode()}")
+        # Receive the first accio command
+        first_accio = client_socket.recv(1024)
+        print(f"Received first accio command: {first_accio.decode()}")
 
-    # Send confirmation for the first accio command
-    client_socket.sendall(b'ACK\r\n')
+        # Send confirmation for the first accio command
+        client_socket.sendall(b'ACK\r\n')
 
-    # Receive the second accio command
-    second_accio = client_socket.recv(1024)
-    print(f"Received second accio command: {second_accio.decode()}")
+        # Receive the second accio command
+        second_accio = client_socket.recv(1024)
+        print(f"Received second accio command: {second_accio.decode()}")
 
-    # Send confirmation for the second accio command
-    client_socket.sendall(b'ACK\r\n')
+        # Send confirmation for the second accio command
+        client_socket.sendall(b'ACK\r\n')
 
-    # Send binary file
-    with open(file_path, 'rb') as file:
-        file_data = file.read()
-        client_socket.sendall(file_data)
+        # Send binary file
+        with open(file_path, 'rb') as file:
+            file_data = file.read()
+            client_socket.sendall(file_data)
 
-    # Close the connection
-    client_socket.close()
+    except Exception as e:
+        print(f"Error in client: {str(e)}")
+
+    finally:
+        # Close the connection
+        client_socket.close()
 
 # Example usage
 accio_client('127.0.0.1', 12345, 'path/to/your/file.bin')
-
