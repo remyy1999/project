@@ -87,6 +87,9 @@ def accio_server(port):
                 # Close the connection
                 conn.close()
 
+    except Exception as e:
+        print(f"Error in server: {str(e)}")
+
     finally:
         # Close the server socket
         server_socket.close()
@@ -144,3 +147,4 @@ def accio_client(host, port, file_path):
 
 # Example usage
 accio_client('127.0.0.1', 12345, 'path/to/your/file.bin')
+
