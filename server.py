@@ -8,12 +8,14 @@ import time
 # Global variables
 connection_counter = 0
 file_dir = ""
-active_connections = []  # Maintain a list of active connections
+active_connections = []  
+overall_timeout = 600  #
 
 def signal_handler(signal, frame):
     print("\nGracefully shutting down the server...")
     # Close all active connections before exiting
-    for conn, _, _ in active_connections:
+    for conn, cid, _ in active_connections:
+        print(f"Connection {cid} closed due to signal.")
         conn.close()
     sys.exit(0)
 
@@ -23,9 +25,7 @@ def handle_client(client_socket, connection_id):
 
     print(f"Connection {connection_id} established.")
 
-    # Set a timeout for the 'accio' message and overall connection
     client_socket.settimeout(10)
-    overall_timeout = 600  # 10 minutes overall timeout
 
     data_received = b""  # Initialize data_received
     start_time = time.time()
@@ -34,7 +34,6 @@ def handle_client(client_socket, connection_id):
         # Send 'accio' message
         client_socket.send(b"accio\r\n")
 
-        # Receive data until 'accio' is found or timeout occurs
         while b"accio" not in data_received:
             chunk = client_socket.recv(4096)
             if not chunk:
@@ -42,10 +41,8 @@ def handle_client(client_socket, connection_id):
 
             data_received += chunk
 
-            # Reset the timer if new data is received
             start_time = time.time()
 
-        # Inform the server that the file has been completely sent
         while b"FILE_SENT" not in data_received:
             chunk = client_socket.recv(4096)
             if not chunk:
@@ -57,7 +54,9 @@ def handle_client(client_socket, connection_id):
         save_file(connection_id, data_received)
 
     except socket.timeout:
-        print(f"Timeout during connection {connection_id}. Closing connection.")
+        print(f"Timeout during connection {connection_id}. Closing connection and writing ERROR.")
+        # Save an ERROR file
+        save_file(connection_id, b"ERROR")
     except socket.error as e:
         print(f"Error during connection {connection_id}: {e}")
 
@@ -65,7 +64,6 @@ def handle_client(client_socket, connection_id):
         # Close the client socket
         client_socket.close()
 
-        # Remove the connection from the active list
         active_connections = [(conn, cid, st) for conn, cid, st in active_connections if cid != connection_id]
 
         print(f"Connection {connection_id} closed.")
@@ -79,25 +77,28 @@ def save_file(connection_id, data):
         with open(filename, "wb") as file:
             file.write(data)
     else:
-        with open(filename, "w") as file:
-            file.write("ERROR")
+        # Create an empty file if no data is received
+        open(filename, 'w').close()
 
 def main():
     global connection_counter
     global file_dir
     global active_connections
+    global overall_timeout
 
+    # Check for the correct number of command-line arguments
     if len(sys.argv) != 3:
         sys.stderr.write("ERROR: Usage: python3 server.py <PORT> <FILE-DIR>\n")
         sys.exit(1)
 
+    # Extract command-line arguments
     port = int(sys.argv[1])
+    file_dir = sys.argv[2]
 
+    # Check if the port number is in the valid range
     if not (0 <= port <= 65535):
         sys.stderr.write("ERROR: Port number must be in the range 0-65535\n")
         sys.exit(1)
-
-    file_dir = sys.argv[2]
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -106,10 +107,11 @@ def main():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
     try:
+        # Bind the server socket to listen on all interfaces
         server_socket.bind(("0.0.0.0", port))
         server_socket.listen(10)
 
-        print(f"Server listening on port {port}")
+        print(f"Server listening on port {port}, saving files to {file_dir}")
 
         while True:
             try:
@@ -130,7 +132,9 @@ def main():
                 # Check for connections that exceeded the overall timeout
                 for conn, cid, start_time in active_connections:
                     if time.time() - start_time > overall_timeout:
-                        print(f"Connection {cid} exceeded overall timeout. Closing connection.")
+                        print(f"Connection {cid} exceeded overall timeout. Closing connection and writing ERROR.")
+                        # Save an ERROR file
+                        save_file(cid, b"ERROR")
                         conn.close()
 
                 # Wait for all threads to finish
