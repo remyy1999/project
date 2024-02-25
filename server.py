@@ -8,22 +8,31 @@ import time
 # Global variables
 connection_counter = 0
 file_dir = ""
+active_connections = []  
 
 def signal_handler(signal, frame):
-    print("\nGracefully shutting down the server...")
+    print("\shutting down the server...")
+    for conn, _, _ in active_connections:
+        conn.close()
     sys.exit(0)
 
 def handle_client(client_socket, connection_id):
     global file_dir
+    global active_connections
 
     print(f"Connection {connection_id} established.")
 
-    # Set a timeout for the 'accio' message
+    # Set a timeout for the 'accio' message 
     client_socket.settimeout(10)
+    overall_timeout = 600  # 10 minutes overall timeout
 
     data_received = b""  # Initialize data_received
+    start_time = time.time()
 
     try:
+        # Send 'accio' message
+        client_socket.send(b"accio\r\n")
+
         # Receive data until 'accio' is found or timeout occurs
         while b"accio" not in data_received:
             chunk = client_socket.recv(4096)
@@ -32,15 +41,17 @@ def handle_client(client_socket, connection_id):
 
             data_received += chunk
 
-        # Rest of the code...
+            # Reset the timer if new data is received
+            start_time = time.time()
 
-        # Inform the server that the file has been completely sent
         while b"FILE_SENT" not in data_received:
             chunk = client_socket.recv(4096)
             if not chunk:
                 break
 
             data_received += chunk
+
+        save_file(connection_id, data_received)
 
     except socket.timeout:
         print(f"Timeout during connection {connection_id}. Closing connection.")
@@ -51,8 +62,8 @@ def handle_client(client_socket, connection_id):
         # Close the client socket
         client_socket.close()
 
-        # Save the data or write an ERROR message
-        save_file(connection_id, data_received)
+        # Remove the connection 
+        active_connections = [(conn, cid, st) for conn, cid, st in active_connections if cid != connection_id]
 
         print(f"Connection {connection_id} closed.")
 
@@ -69,37 +80,80 @@ def save_file(connection_id, data):
             file.write("ERROR")
 
 def main():
-    if len(sys.argv) != 4:
-        sys.stderr.write("ERROR: Usage: python3 client.py <HOST> <PORT> <FILE>\n")
+    global connection_counter
+    global file_dir
+    global active_connections
+
+    if len(sys.argv) != 3:
+        sys.stderr.write("ERROR: Usage: python3 server.py <PORT> <FILE-DIR>\n")
         sys.exit(1)
 
-    host = sys.argv[1]
-    port = int(sys.argv[2])
-    file_path = sys.argv[3]
+    port = int(sys.argv[1])
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-        try:
-            client_socket.connect((host, port))
+    if not (0 <= port <= 65535):
+        sys.stderr.write("ERROR: Port number must be in the range 0-65535\n")
+        sys.exit(1)
 
-            # Send 'accio' message immediately after connection
-            client_socket.send(b"accio\r\n")
+    file_dir = sys.argv[2]
 
-            with open(file_path, "rb") as file:
-                data = file.read(4096)
-                while data:
-                    client_socket.send(data)
-                    data = file.read(4096)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGQUIT, signal_handler)
 
-            # Inform the server that the file has been completely sent
-            client_socket.send(b"FILE_SENT\r\n")
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-        except socket.error as e:
-            print(f"Error during connection: {e}")
+    try:
+        server_socket.bind(("0.0.0.0", port))
+        server_socket.listen(10)
 
-    print("Client finished.")
+        print(f"Server listening on port {port}")
+
+        while True:
+            try:
+                client_socket, addr = server_socket.accept()
+
+                # Start a new thread for each connection
+                connection_counter += 1
+                client_thread = threading.Thread(target=handle_client, args=(client_socket, connection_counter))
+                client_thread.start()
+
+                # Add the connection to the active list
+                active_connections.append((client_socket, connection_counter, time.time()))
+
+                if len(active_connections) < 10:
+                    continue
+
+                for conn, cid, start_time in active_connections:
+                    if time.time() - start_time > overall_timeout:
+                        print(f"Connection {cid} exceeded overall timeout. Closing connection.")
+                        conn.close()
+
+                # Wait for all threads to finish
+                for thread in threading.enumerate():
+                    if thread != threading.current_thread():
+                        thread.join()
+
+                # Clear finished threads
+                active_connections = [(conn, cid, st) for conn, cid, st in active_connections if conn.is_alive()]
+
+            except socket.error as e:
+                print(f"Error accepting connection: {e}")
+
+    except socket.error as e:
+        sys.stderr.write(f"ERROR: {e}\n")
+        sys.exit(1)
+
+    except KeyboardInterrupt:
+        print("\nServer interrupted. Waiting for threads to finish...")
+        for conn, _, _ in active_connections:
+            conn.close()
+        for thread in threading.enumerate():
+            if thread != threading.current_thread():
+                thread.join()
+        print("All threads finished. Closing...")
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
-
 
 
