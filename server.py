@@ -8,10 +8,11 @@ import time
 # Global variables
 connection_counter = 0
 file_dir = ""
-active_connections = []  
+active_connections = []  # Maintain a list of active connections
 
 def signal_handler(signal, frame):
-    print("\shutting down the server...")
+    print("\nGracefully shutting down the server...")
+    # Close all active connections before exiting
     for conn, _, _ in active_connections:
         conn.close()
     sys.exit(0)
@@ -22,7 +23,7 @@ def handle_client(client_socket, connection_id):
 
     print(f"Connection {connection_id} established.")
 
-    # Set a timeout for the 'accio' message 
+    # Set a timeout for the 'accio' message and overall connection
     client_socket.settimeout(10)
     overall_timeout = 600  # 10 minutes overall timeout
 
@@ -44,6 +45,7 @@ def handle_client(client_socket, connection_id):
             # Reset the timer if new data is received
             start_time = time.time()
 
+        # Inform the server that the file has been completely sent
         while b"FILE_SENT" not in data_received:
             chunk = client_socket.recv(4096)
             if not chunk:
@@ -51,6 +53,7 @@ def handle_client(client_socket, connection_id):
 
             data_received += chunk
 
+        # Save the data or write an ERROR message
         save_file(connection_id, data_received)
 
     except socket.timeout:
@@ -62,7 +65,7 @@ def handle_client(client_socket, connection_id):
         # Close the client socket
         client_socket.close()
 
-        # Remove the connection 
+        # Remove the connection from the active list
         active_connections = [(conn, cid, st) for conn, cid, st in active_connections if cid != connection_id]
 
         print(f"Connection {connection_id} closed.")
@@ -120,9 +123,11 @@ def main():
                 # Add the connection to the active list
                 active_connections.append((client_socket, connection_counter, time.time()))
 
+                # Accept another connection if there are less than 10 active connections
                 if len(active_connections) < 10:
                     continue
 
+                # Check for connections that exceeded the overall timeout
                 for conn, cid, start_time in active_connections:
                     if time.time() - start_time > overall_timeout:
                         print(f"Connection {cid} exceeded overall timeout. Closing connection.")
@@ -155,5 +160,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
