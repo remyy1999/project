@@ -17,22 +17,33 @@ def handle_client(client_socket, connection_id):
     global file_dir
 
     print(f"Connection {connection_id} established.")
-    client_socket.send(b"accio\r\n")
 
-    data_received = b""
-    start_time = time.time()
+    # Set a timeout for the 'accio' message
+    client_socket.settimeout(10)
+
+    data_received = b""  # Initialize data_received
 
     try:
-        while True:
+        # Receive data until 'accio' is found or timeout occurs
+        while b"accio" not in data_received:
             chunk = client_socket.recv(4096)
             if not chunk:
                 break
 
             data_received += chunk
 
-            # Reset the timer if new data is received
-            start_time = time.time()
+        # Rest of the code...
 
+        # Inform the server that the file has been completely sent
+        while b"FILE_SENT" not in data_received:
+            chunk = client_socket.recv(4096)
+            if not chunk:
+                break
+
+            data_received += chunk
+
+    except socket.timeout:
+        print(f"Timeout during connection {connection_id}. Closing connection.")
     except socket.error as e:
         print(f"Error during connection {connection_id}: {e}")
 
@@ -49,7 +60,7 @@ def save_file(connection_id, data):
     global file_dir
 
     filename = os.path.join(file_dir, f"{connection_id}.file")
-    
+
     if data:
         with open(filename, "wb") as file:
             file.write(data)
@@ -58,47 +69,37 @@ def save_file(connection_id, data):
             file.write("ERROR")
 
 def main():
-    global connection_counter
-    global file_dir
-
-    if len(sys.argv) != 3:
-        sys.stderr.write("ERROR: Usage: python3 server.py <PORT> <FILE-DIR>\n")
+    if len(sys.argv) != 4:
+        sys.stderr.write("ERROR: Usage: python3 client.py <HOST> <PORT> <FILE>\n")
         sys.exit(1)
 
-    port = int(sys.argv[1])
-    file_dir = sys.argv[2]
+    host = sys.argv[1]
+    port = int(sys.argv[2])
+    file_path = sys.argv[3]
 
-    # Set up signal handling
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGQUIT, signal_handler)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+        try:
+            client_socket.connect((host, port))
 
-    # Set up the main server socket
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
-    try:
-        server_socket.bind(("0.0.0.0", port))
-        server_socket.listen(10)
+            # Send 'accio' message immediately after connection
+            client_socket.send(b"accio\r\n")
 
-        print(f"Server listening on port {port}")
+            with open(file_path, "rb") as file:
+                data = file.read(4096)
+                while data:
+                    client_socket.send(data)
+                    data = file.read(4096)
 
-        while True:
-            client_socket, addr = server_socket.accept()
+            # Inform the server that the file has been completely sent
+            client_socket.send(b"FILE_SENT\r\n")
 
-            # Increment connection counter
-            connection_counter += 1
+        except socket.error as e:
+            print(f"Error during connection: {e}")
 
-            # Create a new thread for each client connection
-            client_thread = threading.Thread(target=handle_client, args=(client_socket, connection_counter))
-            client_thread.start()
-
-    except socket.error as e:
-        sys.stderr.write(f"ERROR: {e}\n")
-        sys.exit(1)
-
-    except KeyboardInterrupt:
-        print("\nServer interrupted. Closing...")
-        sys.exit(0)
+    print("Client finished.")
 
 if __name__ == "__main__":
     main()
+
+
+
